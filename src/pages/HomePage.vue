@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { usePresetStore } from '../stores/presets'
+import { useSound } from '../composables/useSound'
 import PresetCard from '../components/PresetCard.vue'
 import type { TrainingPreset } from '../types'
 
@@ -11,9 +12,23 @@ const emit = defineEmits<{
 }>()
 
 const store = usePresetStore()
+const sound = useSound()
+
+function handleNew() {
+  sound.unlock()
+  emit('newPreset')
+}
 
 onMounted(() => {
   if (!store.loaded) store.load()
+  // Unlock audio on any first user interaction
+  const unlock = () => {
+    sound.unlock()
+    document.removeEventListener('touchstart', unlock)
+    document.removeEventListener('click', unlock)
+  }
+  document.addEventListener('touchstart', unlock, { once: true })
+  document.addEventListener('click', unlock, { once: true })
 })
 </script>
 
@@ -23,7 +38,7 @@ onMounted(() => {
       <div class="logo">
         <span class="logo-orange">Set</span><span class="logo-white">Beat</span>
       </div>
-      <button class="new-btn" @click="emit('newPreset')">
+      <button class="new-btn" @click="handleNew">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
           <rect x="7" y="2" width="2" height="12" rx="1" />
           <rect x="2" y="7" width="12" height="2" rx="1" />

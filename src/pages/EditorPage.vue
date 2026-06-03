@@ -25,6 +25,13 @@ function removeCard(index: number) {
   cards.value.splice(index, 1)
 }
 
+function reorderCard(from: number, to: number) {
+  const list = cards.value
+  if (from < 0 || to < 0 || from >= list.length || to >= list.length || from === to) return
+  const [moved] = list.splice(from, 1)
+  list.splice(to, 0, moved)
+}
+
 async function save() {
   if (!name.value.trim() || cards.value.length === 0) return
 
@@ -75,7 +82,7 @@ async function save() {
         添加时长卡片
       </button>
 
-      <TimeCardList :cards="cards" @remove="removeCard" />
+      <TimeCardList :cards="cards" @remove="removeCard" @reorder="reorderCard" />
     </div>
 
     <footer class="footer">
