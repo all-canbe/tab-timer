@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { formatTime } from '../utils/format'
 import type { TimeCard } from '../types'
 
 defineProps<{ cards: TimeCard[] }>()
@@ -12,9 +13,7 @@ const dragIndex = ref<number | null>(null)
 const dragOverIndex = ref<number | null>(null)
 
 function formatDuration(s: number): string {
-  const m = Math.floor(s / 60)
-  const sec = s % 60
-  return `${m}:${String(sec).padStart(2, '0')}`
+  return formatTime(s)
 }
 
 function onDragStart(e: DragEvent, index: number) {
@@ -153,15 +152,15 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
 
 <style scoped>
 .card-list {
-  background: #222248;
-  border-radius: 12px;
-  border: 1px solid #2a2a4a;
+  background: var(--surface, #141830);
+  border-radius: var(--radius-md, 14px);
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.07));
   padding: 6px 0;
 }
 .empty {
   padding: 24px 16px;
   text-align: center;
-  color: #667;
+  color: var(--text-3, #5c6480);
   font-size: 13px;
 }
 .card-row {
@@ -169,7 +168,7 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 8px;
+  border-radius: 10px;
   margin: 0 6px;
   transition: background 0.15s, transform 0.15s, opacity 0.15s;
   user-select: none;
@@ -178,7 +177,7 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
 }
 .card-row.is-dragging {
   opacity: 0.5;
-  background: #2a2a5a;
+  background: var(--surface-hi, #232a4a);
 }
 .card-row.is-drop-target {
   background: rgba(255, 107, 53, 0.12);
@@ -186,7 +185,7 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
   box-shadow: 0 -2px 0 0 #ff6b35;
 }
 .drag-handle {
-  color: #556;
+  color: var(--text-3, #5c6480);
   display: flex;
   align-items: center;
   cursor: grab;
@@ -195,7 +194,7 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
 }
 .drag-handle:active {
   cursor: grabbing;
-  color: #889;
+  color: var(--text-2, #9aa3bf);
 }
 .index-circle {
   width: 26px;
@@ -211,7 +210,7 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
 }
 .label {
   font-size: 15px;
-  color: #eee;
+  color: var(--text-1, #f4f6fb);
   font-weight: 500;
   flex: 1;
   min-width: 0;
@@ -222,11 +221,11 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
 .duration {
   font-size: 14px;
   font-weight: 600;
-  color: #ff6b35;
+  color: var(--accent, #ff6b35);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
   padding: 2px 8px;
-  background: rgba(255, 107, 53, 0.1);
+  background: var(--accent-soft, rgba(255, 107, 53, 0.1));
   border-radius: 6px;
 }
 .del-btn {
@@ -234,7 +233,7 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
   height: 30px;
   border: none;
   background: transparent;
-  color: #889;
+  color: var(--text-3, #5c6480);
   opacity: 0.6;
   cursor: pointer;
   display: flex;
@@ -250,11 +249,11 @@ function onTouchEnd(_e: TouchEvent, _index: number) {
 .hint {
   padding: 8px 16px 6px;
   font-size: 11px;
-  color: #556;
+  color: var(--text-3, #5c6480);
   text-align: center;
 }
 .hint-icon {
-  color: #889;
+  color: var(--text-2, #9aa3bf);
   font-weight: 700;
 }
 </style>

@@ -30,27 +30,28 @@ defineProps<{ currentRound: number; totalRounds: number }>()
 }
 .segments {
   display: flex;
-  gap: 6px;
+  gap: 5px;
 }
 .segment {
-  width: 28px;
+  width: 26px;
   height: 4px;
   border-radius: 4px;
   transition: background 0.3s, box-shadow 0.3s;
 }
 .segment.done {
-  background: linear-gradient(90deg, #4ecdc4, #44b8b0);
+  background: var(--teal, #4ecdc4);
   box-shadow: 0 0 6px rgba(78, 205, 196, 0.5);
 }
 .segment.active {
-  background: linear-gradient(90deg, #ff6b35, #ff8c5a);
+  background: linear-gradient(90deg, var(--accent, #ff6b35), var(--accent-2, #ff8c5a));
   box-shadow: 0 0 8px rgba(255, 107, 53, 0.6);
 }
 .segment.pending {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.1);
 }
 .text {
   font-size: 12px;
-  color: #8899aa;
+  color: var(--text-3, #5c6480);
+  font-variant-numeric: tabular-nums;
 }
 </style>

@@ -73,7 +73,7 @@ export class TimerEngine {
   }
 
   skip(): void {
-    if (!this._state) return
+    if (!this._state || this._state.status === 'finished') return
     this._cancelFrame()
     this._advanceToNext()
   }

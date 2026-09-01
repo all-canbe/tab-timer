@@ -10,9 +10,13 @@ const borderColor = computed(() => props.preset.cards[0]?.color ?? '#ff6b35')
 
 function durationSequence(): string {
   return props.preset.cards.map(c => {
+    if (c.duration >= 3600) {
+      const h = Math.floor(c.duration / 3600)
+      const m = Math.round((c.duration % 3600) / 60)
+      return m > 0 ? `${h}h${m}min` : `${h}h`
+    }
     if (c.duration >= 60) {
-      const m = Math.floor(c.duration / 60)
-      return `${m}min`
+      return `${Math.round(c.duration / 60)}min`
     }
     return `${c.duration}s`
   }).join('+')
@@ -20,16 +24,27 @@ function durationSequence(): string {
 </script>
 
 <template>
-  <div class="preset-card" @click="emit('edit')">
-    <div class="color-bar" :style="{ background: borderColor }"></div>
+  <div class="preset-card" :style="{ '--card': borderColor }" @click="emit('edit')">
+    <div class="card-left">
+      <div class="color-dots">
+        <span
+          v-for="c in preset.cards.slice(0, 4)"
+          :key="c.id"
+          class="dot"
+          :style="{ background: c.color }"
+        ></span>
+        <span v-if="preset.cards.length > 4" class="dot-more">+{{ preset.cards.length - 4 }}</span>
+      </div>
+    </div>
     <div class="content">
       <div class="name">{{ preset.name }}</div>
       <div class="summary">
-        {{ durationSequence() }} · 循环{{ preset.loopCount }}次 · 共{{ calcTotalDurationStr(preset.cards, preset.loopCount) }}
+        <span class="seq">{{ durationSequence() }}</span>
+        <span class="meta">循环 {{ preset.loopCount }} 次 · 共 {{ calcTotalDurationStr(preset.cards, preset.loopCount) }}</span>
       </div>
     </div>
-    <button class="play-btn" :style="{ background: borderColor }" @click.stop="emit('start')">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="white">
+    <button class="play-btn" @click.stop="emit('start')">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
         <polygon points="4,2 14,8 4,14" />
       </svg>
     </button>
@@ -41,53 +56,89 @@ function durationSequence(): string {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #222248 0%, #1e1e3e 100%);
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
   cursor: pointer;
-  transition: transform 0.15s ease;
+  transition: transform 0.15s ease, border-color 0.15s ease;
   user-select: none;
 }
 .preset-card:active {
   transform: scale(0.98);
+  border-color: color-mix(in srgb, var(--card) 45%, transparent);
 }
-.color-bar {
-  width: 4px;
-  height: 40px;
-  border-radius: 4px;
+
+.card-left {
   flex-shrink: 0;
 }
+
+.color-dots {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 2px;
+}
+
+.dot {
+  width: 22px;
+  height: 5px;
+  border-radius: 3px;
+}
+
+.dot-more {
+  font-size: 9px;
+  color: var(--text-3);
+  text-align: center;
+  line-height: 1;
+}
+
 .content {
   flex: 1;
   min-width: 0;
 }
+
 .name {
   font-size: 15px;
-  font-weight: 600;
-  color: #eee;
-  margin-bottom: 4px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 5px;
 }
+
 .summary {
-  font-size: 12px;
-  color: #8899aa;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
+
+.seq {
+  font-size: 12px;
+  color: var(--card);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.meta {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
 .play-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  box-shadow: 0 0 12px rgba(255, 107, 53, 0.4);
-  transition: box-shadow 0.2s;
+  color: #fff;
+  background: linear-gradient(135deg, var(--card), color-mix(in srgb, var(--card) 65%, #ffffff));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--card) 35%, transparent);
+  transition: transform 0.15s, box-shadow 0.2s;
 }
 .play-btn:active {
-  box-shadow: 0 0 20px rgba(255, 107, 53, 0.6);
+  transform: scale(0.93);
 }
 </style>

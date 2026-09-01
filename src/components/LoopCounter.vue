@@ -39,7 +39,7 @@ function inc(val: number) {
 }
 .label {
   font-size: 14px;
-  color: #8899aa;
+  color: var(--text-2, #9aa3bf);
 }
 .ctrl-group {
   display: flex;
@@ -49,10 +49,10 @@ function inc(val: number) {
 .ctrl-btn {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
-  border: 1px solid #334;
-  background: #222248;
-  color: #ccd;
+  border-radius: 10px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.07));
+  background: var(--surface, #141830);
+  color: var(--text-2, #9aa3bf);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -64,12 +64,12 @@ function inc(val: number) {
   cursor: not-allowed;
 }
 .ctrl-btn:not(:disabled):active {
-  background: #2a2a5a;
+  background: var(--surface-hi, #232a4a);
 }
 .value {
   font-size: 18px;
   font-weight: 700;
-  color: #eee;
+  color: var(--text-1, #f4f6fb);
   min-width: 28px;
   text-align: center;
   font-variant-numeric: tabular-nums;

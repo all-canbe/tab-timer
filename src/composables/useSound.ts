@@ -69,12 +69,41 @@ export function useSound() {
     playTone(660, 0.3, 0.4)
   }
 
+  // 通知在实机上不可靠，改为播放 5 秒音乐提醒
   function playFinish() {
     if (!enabled.value) return
-    playTone(880, 0.3, 0.4)
-    setTimeout(() => {
-      playTone(1100, 0.4, 0.4)
-    }, 300)
+    try {
+      const ctx = getAudioCtx()
+      if (ctx.state === 'suspended') ctx.resume()
+      // 旋律：上行琶音 + 结尾长音，共 5 秒
+      const melody: Array<[number, number, number]> = [
+        // [频率, 起始秒, 持续秒]
+        [523.25, 0.0, 0.5],  // C5
+        [659.25, 0.35, 0.5], // E5
+        [783.99, 0.7, 0.5],  // G5
+        [1046.5, 1.05, 0.8], // C6
+        [783.99, 1.9, 0.4],  // G5
+        [880.0, 2.3, 0.4],   // A5
+        [1046.5, 2.7, 0.9],  // C6
+        [1318.5, 3.2, 1.8],  // E6 长音
+      ]
+      for (const [freq, start, dur] of melody) {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        const t0 = ctx.currentTime + start
+        gain.gain.setValueAtTime(0, t0)
+        gain.gain.linearRampToValueAtTime(0.4, t0 + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur)
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start(t0)
+        osc.stop(t0 + dur)
+      }
+    } catch (e) {
+      console.warn('[sound] playFinish failed:', e)
+    }
   }
 
   async function toggle() {

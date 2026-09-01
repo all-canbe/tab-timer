@@ -7,3 +7,4 @@ android/capacitor-android/
 android/build/
 *.log
 .DS_Store
+src/**/*.js

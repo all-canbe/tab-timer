@@ -40,6 +40,7 @@ export const useTimerStore = defineStore('timer', () => {
       },
       onFinish() {
         status.value = 'finished'
+        remainingMs.value = 0
         RunningStateStorage.clear()
         if (settings.soundEnabled) sound.playFinish()
         if (settings.vibrationEnabled) vibration.playFinish()

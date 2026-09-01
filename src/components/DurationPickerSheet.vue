@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { generateId } from '../utils/format'
+import { generateId, formatTime } from '../utils/format'
 import type { TimeCard } from '../types'
 
 const emit = defineEmits<{
@@ -11,28 +11,35 @@ const emit = defineEmits<{
 const PRESET_COLORS = ['#ff6b35', '#4ecdc4', '#ffd166', '#a78bfa', '#f472b6', '#34d399']
 
 const name = ref('')
+const hour = ref(0)
 const minute = ref(1)
 const second = ref(0)
 
 // Preset chip suggestions
 const presets = [
-  { label: '15s', m: 0, s: 15 },
-  { label: '30s', m: 0, s: 30 },
-  { label: '45s', m: 0, s: 45 },
-  { label: '1min', m: 1, s: 0 },
-  { label: '2min', m: 2, s: 0 },
-  { label: '5min', m: 5, s: 0 },
+  { label: '15s', h: 0, m: 0, s: 15 },
+  { label: '30s', h: 0, m: 0, s: 30 },
+  { label: '45s', h: 0, m: 0, s: 45 },
+  { label: '1min', h: 0, m: 1, s: 0 },
+  { label: '5min', h: 0, m: 5, s: 0 },
+  { label: '25min', h: 0, m: 25, s: 0 },
+  { label: '45min', h: 0, m: 45, s: 0 },
+  { label: '1h', h: 1, m: 0, s: 0 },
 ]
 
-function applyPreset(p: { m: number; s: number }) {
+function applyPreset(p: { h: number; m: number; s: number }) {
+  hour.value = p.h
   minute.value = p.m
   second.value = p.s
 }
 
-const totalSeconds = computed(() => minute.value * 60 + second.value)
+const totalSeconds = computed(() => hour.value * 3600 + minute.value * 60 + second.value)
+const totalText = computed(() => formatTime(totalSeconds.value))
 const isValid = computed(() => name.value.trim().length > 0 && totalSeconds.value > 0)
 
-function incMinute() { minute.value = Math.min(99, minute.value + 1) }
+function incHour() { hour.value = Math.min(9, hour.value + 1) }
+function decHour() { hour.value = Math.max(0, hour.value - 1) }
+function incMinute() { minute.value = Math.min(59, minute.value + 1) }
 function decMinute() { minute.value = Math.max(0, minute.value - 1) }
 function incSecond() { second.value = (second.value + 5) % 60 }
 function decSecond() { second.value = (second.value + 55) % 60 }
@@ -90,6 +97,15 @@ onBeforeUnmount(() => {
 
       <div class="wheel-row">
         <div class="wheel-group">
+          <div class="wheel-label">时</div>
+          <div class="wheel">
+            <button class="wheel-btn" @click="incHour">+</button>
+            <div class="wheel-value">{{ String(hour).padStart(2, '0') }}</div>
+            <button class="wheel-btn" @click="decHour">−</button>
+          </div>
+        </div>
+        <div class="wheel-sep">:</div>
+        <div class="wheel-group">
           <div class="wheel-label">分</div>
           <div class="wheel">
             <button class="wheel-btn" @click="incMinute">+</button>
@@ -109,7 +125,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="total">
-        总时长 <strong>{{ Math.floor(totalSeconds / 60) }}:{{ String(totalSeconds % 60).padStart(2, '0') }}</strong>
+        总时长 <strong>{{ totalText }}</strong>
       </div>
 
       <div class="actions">
@@ -137,8 +153,10 @@ onBeforeUnmount(() => {
 .sheet {
   width: 100%;
   max-width: 480px;
-  background: #1a1a35;
-  border-radius: 20px 20px 0 0;
+  background: var(--surface, #141830);
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.14));
+  border-bottom: none;
+  border-radius: 24px 24px 0 0;
   padding: 12px 20px calc(24px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
@@ -149,7 +167,7 @@ onBeforeUnmount(() => {
 .grabber {
   width: 40px;
   height: 4px;
-  background: #445;
+  background: var(--line-strong, rgba(255, 255, 255, 0.14));
   border-radius: 2px;
   margin: 4px auto 4px;
 }
@@ -157,7 +175,7 @@ onBeforeUnmount(() => {
 .title {
   font-size: 17px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-1, #f4f6fb);
   text-align: center;
   margin-bottom: 4px;
 }
@@ -165,15 +183,15 @@ onBeforeUnmount(() => {
 .name-input {
   height: 44px;
   padding: 0 14px;
-  border-radius: 10px;
-  border: 1px solid #334;
-  background: #222248;
-  color: #eee;
+  border-radius: var(--radius-sm, 10px);
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.07));
+  background: var(--surface-2, #1b2038);
+  color: var(--text-1, #f4f6fb);
   font-size: 15px;
   outline: none;
 }
-.name-input::placeholder { color: #556; }
-.name-input:focus { border-color: #ff6b35; }
+.name-input::placeholder { color: var(--text-3, #5c6480); }
+.name-input:focus { border-color: var(--accent, #ff6b35); }
 
 .presets {
   display: flex;
@@ -184,17 +202,17 @@ onBeforeUnmount(() => {
 .preset-chip {
   padding: 6px 14px;
   border-radius: 16px;
-  border: 1px solid #334;
-  background: #222248;
-  color: #ccd;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.07));
+  background: var(--surface-2, #1b2038);
+  color: var(--text-2, #9aa3bf);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s;
 }
 .preset-chip:active {
-  background: #2a2a5a;
-  border-color: #ff6b35;
-  color: #ff6b35;
+  background: var(--surface-hi, #232a4a);
+  border-color: var(--accent, #ff6b35);
+  color: var(--accent, #ff6b35);
 }
 
 .wheel-row {
@@ -212,16 +230,16 @@ onBeforeUnmount(() => {
 }
 .wheel-label {
   font-size: 12px;
-  color: #889;
+  color: var(--text-2, #9aa3bf);
   font-weight: 600;
 }
 .wheel {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: #222248;
+  background: var(--surface-2, #1b2038);
   border-radius: 12px;
-  border: 1px solid #2a2a4a;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.07));
   width: 84px;
   overflow: hidden;
 }
@@ -230,17 +248,17 @@ onBeforeUnmount(() => {
   height: 36px;
   border: none;
   background: transparent;
-  color: #ccd;
+  color: var(--text-2, #9aa3bf);
   font-size: 18px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
 }
-.wheel-btn:active { background: #2a2a5a; }
+.wheel-btn:active { background: var(--surface-hi, #232a4a); }
 .wheel-value {
   font-size: 28px;
   font-weight: 700;
-  color: #ff6b35;
+  color: var(--accent, #ff6b35);
   font-variant-numeric: tabular-nums;
   padding: 4px 0;
   user-select: none;
@@ -248,17 +266,17 @@ onBeforeUnmount(() => {
 .wheel-sep {
   font-size: 28px;
   font-weight: 700;
-  color: #556;
+  color: var(--text-3, #5c6480);
   margin-top: 22px;
 }
 
 .total {
   text-align: center;
   font-size: 13px;
-  color: #889;
+  color: var(--text-2, #9aa3bf);
 }
 .total strong {
-  color: #ff6b35;
+  color: var(--accent, #ff6b35);
   font-variant-numeric: tabular-nums;
   margin-left: 4px;
 }
@@ -280,17 +298,19 @@ onBeforeUnmount(() => {
   transition: opacity 0.15s;
 }
 .cancel-btn {
-  background: #222248;
-  color: #ccd;
+  background: var(--surface-2, #1b2038);
+  color: var(--text-2, #9aa3bf);
 }
 .cancel-btn:active { opacity: 0.8; }
 .confirm-btn {
-  background: linear-gradient(135deg, #ff6b35, #ff8c5a);
+  background: linear-gradient(135deg, var(--accent, #ff6b35), var(--accent-2, #ff8c5a));
   color: #fff;
+  box-shadow: 0 4px 14px rgba(255, 107, 53, 0.35);
 }
 .confirm-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+  box-shadow: none;
 }
 .confirm-btn:not(:disabled):active { opacity: 0.85; }
 </style>
