@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知小图标必须显式保留。
+
+  它的引用方是 Dart 代码里的字符串（AndroidInitializationSettings('ic_stat_setbeat')），
+  release 构建的资源压缩器看不到这层引用，会把 drawable 整个删掉；
+  结果通知投递时 getIdentifier() 返回 0，setSmallIcon(0) 抛异常，
+  广播接收器所在进程直接崩溃 —— 表现为「到点不弹通知 + App 闪退」。
+  真机上已实际踩过，这里用官方 tools:keep 兜住。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_setbeat" />
