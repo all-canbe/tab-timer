@@ -48,20 +48,12 @@ app.*.map.json
 .widget_preview/
 
 # ---------------------------------------------------------------------------
-# 仓库根目录布局相关（本段需与 setbeat_flutter/.gitignore 完全一致）
+# 本地开发布局（本段需与 setbeat_flutter/.gitignore 完全一致）
 # ---------------------------------------------------------------------------
-# setbeat_flutter/ 是本地开发副本，不纳入版本控制；仓库根目录是发布副本。
-# 开发在 setbeat_flutter/ 内进行，改动再同步到根目录提交。
+# 仓库根目录是发布副本，setbeat_flutter/ 是本地工作副本：开发在子目录内进行，
+# 改动用 sync-from-dev.ps1 同步到根目录后提交。
 setbeat_flutter/
-
-# 已删除的旧 Capacitor/Vue 工程残留，不应再进入版本控制
-node_modules/
-dist/
-public/
-android/app/build/
-android/app/src/main/assets/
-android/app/src/main/res/xml/
-android/capacitor-cordova-android-plugins/
-
-# 本地同步脚本（子目录开发 → 根目录发布），仅供本地使用，不提交
 sync-from-dev.ps1
+
+# Android 构建产物（AGP 输出在模块目录下，根部的 /build/ 覆盖不到）
+/android/app/build/
