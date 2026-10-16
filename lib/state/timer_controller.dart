@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart'
+    show DataCallback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -10,7 +12,10 @@ import '../models/app_settings.dart';
 import '../models/time_card.dart';
 import '../models/timer_state.dart';
 import '../models/training_preset.dart';
-import '../services/notification_service.dart' show AlarmCapability, NotificationService;
+import '../services/foreground_timer_service.dart'
+    show ForegroundTimerService, describeForeground;
+import '../services/notification_service.dart'
+    show AlarmCapability, NotificationService;
 import 'services.dart';
 
 /// 计时页的「粗粒度」状态：只在段位切换 / 计时状态变化时更新。
@@ -80,9 +85,17 @@ class TimerViewState {
 class TimerController extends Notifier<TimerViewState> {
   TimerEngine? _engine;
 
+  /// 后台 isolate 的 `need-sync` 消息回调。留着是为了在 dispose 时注销。
+  DataCallback? _syncListener;
+
   @override
   TimerViewState build() {
     ref.onDispose(_teardown);
+    // 后台 isolate 发现时间轴用尽时会喊一声。这个回调走的是端口消息，
+    // 不依赖 Flutter 帧循环 —— 所以即便 App 退到后台不再渲染，它照样能执行，
+    // 有机会把新的时间轴补下去。
+    _syncListener =
+        ForegroundTimerService.addSyncRequestListener(_syncForeground);
     return const TimerViewState();
   }
 
@@ -112,6 +125,11 @@ class TimerController extends Notifier<TimerViewState> {
     // ① 权限弹窗/跳系统页不应拖延甚至打断排期；
     // ② 排期失败不能被权限路径的异常连坐（home 页是 fire-and-forget 调用本方法）。
     await _scheduleAlerts();
+    // 拉起常驻通知。它同时承担两件事：**保证进程不被 ROM 冻结/强杀**
+    //（进程一被 force-stop，刚排好的闹钟会被系统一并清空），
+    // 以及让用户在锁屏上就能看到当前阶段与剩余时间。
+    // 不 await：服务启动要走一次冷启动 isolate，不该拖住 start() 的返回。
+    unawaited(_syncForeground());
     unawaited(_requestPermissionsSafe());
     unawaited(_wakeLock(true)); // 常亮是尽力而为，不阻塞启动流程
   }
@@ -140,6 +158,9 @@ class TimerController extends Notifier<TimerViewState> {
     _syncFromEngine();
     // 暂停时不再需要排期提醒（恢复时会重新排）
     await ref.read(notificationServiceProvider).cancelAll();
+    // 常驻通知**不停**：暂停也是计时会话的一部分，进程仍需保活，
+    // 否则用户暂停后切后台，回来时计时现场可能已经丢了。
+    unawaited(_syncForeground());
     await _saveRunningState();
   }
 
@@ -151,6 +172,7 @@ class TimerController extends Notifier<TimerViewState> {
     ref.read(soundServiceProvider).playChime();
     ref.read(hapticsServiceProvider).playTransition();
     await _scheduleAlerts();
+    unawaited(_syncForeground());
   }
 
   Future<void> skip() async {
@@ -159,6 +181,7 @@ class TimerController extends Notifier<TimerViewState> {
     engine.skip();
     _syncFromEngine();
     await _scheduleAlerts();
+    unawaited(_syncForeground());
   }
 
   Future<void> reset() async {
@@ -168,6 +191,7 @@ class TimerController extends Notifier<TimerViewState> {
     _syncFromEngine();
     await ref.read(hapticsServiceProvider).cancel();
     await _scheduleAlerts();
+    unawaited(_syncForeground());
   }
 
   /// 离开计时页：彻底收尾
@@ -175,6 +199,7 @@ class TimerController extends Notifier<TimerViewState> {
     _engine?.destroy();
     await ref.read(hapticsServiceProvider).cancel();
     await ref.read(notificationServiceProvider).cancelAll();
+    await ref.read(foregroundServiceProvider).stop();
     await ref.read(runningStateRepositoryProvider).clear();
     await _wakeLock(false);
     ringProgress.value = 0;
@@ -196,10 +221,14 @@ class TimerController extends Notifier<TimerViewState> {
     final RestoreOutcome outcome = engine.restore(snapshot, _bridge);
     if (outcome != RestoreOutcome.restored) {
       await ref.read(runningStateRepositoryProvider).clear();
+      // 上一次计时在离开期间就结束了：顺手收掉可能还挂着的常驻通知。
+      // 不收的话用户会看到一条停在「剩余 00:00」的通知，而 App 里明明没有计时。
+      await ref.read(foregroundServiceProvider).stop();
       return outcome;
     }
     _syncFromEngine();
     await _scheduleAlerts();
+    unawaited(_syncForeground());
     if (engine.status == TimerStatus.running) {
       unawaited(_wakeLock(true)); // 不阻塞恢复流程（个别机型 wakelock 通道会挂起）
     }
@@ -246,6 +275,9 @@ class TimerController extends Notifier<TimerViewState> {
     // 阶段切换提示：一声短「滴」+ 两次短震
     ref.read(soundServiceProvider).playTick();
     ref.read(hapticsServiceProvider).playTransition();
+    // 段位变了，常驻通知立刻跟上。用 unawaited：这里是同步回调，
+    // 而且通知晚一两百毫秒刷新没有任何影响。
+    unawaited(_syncForeground());
   }
 
   void _handleCountdown(int secondsLeft) {
@@ -270,6 +302,10 @@ class TimerController extends Notifier<TimerViewState> {
     // 方案已结束、没有未来边界，残留排期本就不存在。
     ref.read(runningStateRepositoryProvider).clear();
     _wakeLock(false);
+
+    // 常驻通知改成「训练完成」并留在通知栏，直到用户离开计时页才停。
+    // 直接 stop 的话，用户切后台回来会以为计时被重置了。
+    unawaited(_syncForeground());
   }
 
   // ------------------------------------------------------------------ 内部
@@ -338,6 +374,62 @@ class TimerController extends Notifier<TimerViewState> {
     );
   }
 
+  /// 把当前状态同步到常驻通知。
+  ///
+  /// 这是引擎与前台服务之间**唯一**的接缝：计时活着的每一刻把状态同步过去，
+  /// 空闲或已结束时把服务停掉。
+  ///
+  /// **刻意不缓存「服务有没有在跑」**。之前缓过，结果被现实打脸：结束提醒的
+  /// 原生接收器会在投递时把服务停掉（见 `SetBeatAlertReceiver`），Dart 侧的
+  /// 缓存对此一无所知，于是「服务明明该在跑却再也起不来」。
+  /// `start()` 内部本来就做了「已在跑就只更新」的判断，交给它就行 ——
+  /// 多一次平台通道调用的代价，远小于一个会过期的状态位。
+  ///
+  /// 任何异常都吞掉：常驻通知是「尽力而为」的能力，它失败不能影响计时本身。
+  Future<void> _syncForeground() async {
+    final TimerEngine? engine = _engine;
+    final ForegroundTimerService svc = ref.read(foregroundServiceProvider);
+
+    // 结束态也走 stop：计时已完，不需要保活；而常驻通知继续挂着的话，
+    // 「训练完成」会同时出现在常驻通知和结束提醒里，看起来就是发了两条。
+    if (engine == null ||
+        engine.status == TimerStatus.idle ||
+        engine.status == TimerStatus.finished) {
+      await svc.stop();
+      return;
+    }
+
+    try {
+      final String status = engine.status.name;
+      final List<ForegroundPhase> phases = engine.foregroundPhases();
+      final int pausedRemaining =
+          engine.status == TimerStatus.paused ? engine.remainingMs.round() : 0;
+      final String presetName =
+          engine.getState()?.preset.name ?? state.presetName;
+
+      // 文案由共享的 describeForeground 推导，与后台 isolate 每秒重算的
+      // 是同一套规则 —— 两边各写一份的话，初始那一下必然对不上。
+      final ({String title, String text}) d = describeForeground(
+        presetName: presetName,
+        status: status,
+        phases: phases,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+        pausedRemainingMs: pausedRemaining,
+      );
+
+      await svc.start(
+        presetName: presetName,
+        title: d.title,
+        text: d.text,
+        phases: phases,
+        status: status,
+        pausedRemainingMs: pausedRemaining,
+      );
+    } catch (_) {
+      // 常驻通知失败不影响计时与闹钟排期
+    }
+  }
+
   Future<void> _saveRunningState() async {
     final TimerEngine? engine = _engine;
     if (engine == null) return;
@@ -379,6 +471,11 @@ class TimerController extends Notifier<TimerViewState> {
   }
 
   void _teardown() {
+    final DataCallback? listener = _syncListener;
+    if (listener != null) {
+      ForegroundTimerService.removeSyncRequestListener(listener);
+      _syncListener = null;
+    }
     _engine?.destroy();
     ringProgress.dispose();
     secondsLeft.dispose();

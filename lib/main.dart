@@ -5,11 +5,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
+import 'services/foreground_timer_service.dart';
 import 'state/services.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 前台服务配置。同步、幂等、不碰平台通道，放在这里最合适：
+  // 必须在任何 startService 之前完成，否则插件抛 ServiceNotInitializedException。
+  // 它只是往插件里塞了几个静态配置对象，不会有启动开销。
+  ForegroundTimerService.configure();
 
   // 锁竖屏 + 状态栏样式。不 await：这是 main() 里唯一的另一处平台调用，
   // 保持「runApp 之前零阻塞」的原则 —— 就算它失败也只是少了竖屏锁定。

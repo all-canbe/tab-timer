@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/notification_service.dart';
 import '../services/platform_bridge.dart';
+import '../services/rom_compat.dart';
 import '../state/services.dart';
 import '../theme/app_theme.dart';
 
@@ -33,6 +34,20 @@ class _AlarmDiagnosticsSheetState
     extends ConsumerState<_AlarmDiagnosticsSheet> {
   AlarmCapability? _capability;
   int? _pending;
+
+  /// 是否已豁免电池优化。null = 平台未实现（Web / 非 Android）。
+  ///
+  /// 这一项比「通知权限」更值得盯：国产 ROM 上未豁免的应用退后台会被冻结/强杀，
+  /// 而 force-stop 会连同 AlarmManager 闹钟一起清空 —— 排期明明成功，到点却什么都没有。
+  bool? _batteryExempt;
+
+  /// 当前 ROM。用来把引导文案换成该厂商实际存在的菜单路径 ——
+  /// 给 ColorOS 用户看「省电策略 → 无限制」（那是 MIUI 的措辞）纯属添乱。
+  RomVendor? _vendor;
+
+  /// 前台服务（常驻通知）是否真的在跑。这是问系统的，不是读缓存。
+  bool _foregroundRunning = false;
+
   String? _testResult;
   bool _busy = false;
 
@@ -47,10 +62,18 @@ class _AlarmDiagnosticsSheetState
     final NotificationService svc = ref.read(notificationServiceProvider);
     final AlarmCapability cap = await svc.checkCapability();
     final int pending = await svc.pendingNotificationCount();
+    final bool? batteryExempt =
+        await PlatformBridge.isIgnoringBatteryOptimizations();
+    final RomVendor vendor = await RomCompat.detect();
+    final bool foregroundRunning =
+        await ref.read(foregroundServiceProvider).isRunning;
     if (!mounted) return;
     setState(() {
       _capability = cap;
       _pending = pending;
+      _batteryExempt = batteryExempt;
+      _vendor = vendor;
+      _foregroundRunning = foregroundRunning;
       _busy = false;
     });
   }
@@ -69,6 +92,35 @@ class _AlarmDiagnosticsSheetState
           ? '已排期，3 秒后应出现通知。没看到就往下看系统设置要点。'
           : '排期失败：${svc.lastScheduleError ?? '未知原因'}';
     });
+  }
+
+  /// 按当前 ROM 生成引导文案。
+  ///
+  /// 存在的意义是「别给用户看他不存在的菜单」——ColorOS 上没有「省电策略」，
+  /// MIUI 上没有「耗电管理」，原生 Android 上两者都没有。
+  String _guidanceText() {
+    final RomVendor vendor = _vendor ?? RomVendor.unknown;
+    final StringBuffer b = StringBuffer();
+
+    b.writeln('① 通知设置里勾选「横幅」与「锁屏」；铃声 / 振动按需打开。');
+    b.writeln('② 通知设置页滚到底部，打开「桌面角标」（数字角标的总开关）。');
+
+    final List<String> steps = vendor.keepAliveSteps;
+    if (steps.isEmpty) {
+      b.writeln('③ 当前是 ${vendor.displayName}，没有额外的后台保活闸门，'
+          '只要电池策略不是「受限」即可。');
+    } else {
+      b.writeln('③ ${vendor.displayName} 必须手动放开的闸门（默认全是关的）：');
+      for (final String step in steps) {
+        b.writeln('   · $step');
+      }
+    }
+
+    b.writeln('④ 三者缺一不可：自启动让进程起得来，后台运行让它活得下去，'
+        '加锁让它不被一键清理连带杀掉。缺任何一个，计时排好的闹钟都可能'
+        '被系统连同进程一起清空。');
+    b.write('注意：短于 1 分钟的段位不弹边界提醒（避免刷屏），训练结束始终会提醒。');
+    return b.toString();
   }
 
   @override
@@ -93,6 +145,12 @@ class _AlarmDiagnosticsSheetState
             ),
             const SizedBox(height: 16),
             _StatusRow(
+              label: '系统 ROM',
+              ok: true,
+              detail: '${(_vendor ?? RomVendor.unknown).displayName}'
+                  '${(_vendor ?? RomVendor.unknown).keepAliveSteps.isEmpty ? '（无需额外保活设置）' : '（需要手动放开后台保活）'}',
+            ),
+            _StatusRow(
               label: '通知权限',
               ok: cap?.notificationsAllowed ?? false,
               detail: (cap?.notificationsAllowed ?? false) ? '已开启' : '未开启',
@@ -105,11 +163,32 @@ class _AlarmDiagnosticsSheetState
                   : '未授权 —— 已自动降级为「大致准时」，最多延迟几分钟',
             ),
             _StatusRow(
-              label: '系统内已排期提醒',
+              label: '电池优化豁免',
+              ok: _batteryExempt ?? true,
+              detail: switch (_batteryExempt) {
+                null => '本平台不适用',
+                true => '已豁免，退后台不会被冻结',
+                false => '未豁免 —— 退后台可能被强杀，闹钟会被系统清空',
+              },
+            ),
+            _StatusRow(
+              label: '常驻通知（前台服务）',
+              ok: _foregroundRunning,
+              detail: _foregroundRunning
+                  ? '运行中 —— 进程不会被 ROM 随手清掉'
+                  : '未运行 —— 开始一次计时就会拉起（这是提醒能到达的前提）',
+            ),
+            _StatusRow(
+              label: '系统内已武装的提醒',
               ok: (_pending ?? 0) > 0,
+              // 这个数字是逐个探测系统闹钟拿到的，不是本地记录 ——
+              // 应用被 force-stop 后系统清空了闹钟，它会如实变成 0。
+              // （旧实现读本地记录，在那种情况下会报出旧数字，把排查带偏过。）
               detail: _pending == null
                   ? '查询中…'
-                  : (_pending! > 0 ? '$_pending 条' : '暂无（先开始一次计时）'),
+                  : (_pending! > 0
+                      ? '$_pending 条（直接来自系统闹钟）'
+                      : '暂无（先开始一次计时）'),
             ),
             const SizedBox(height: 16),
             Container(
@@ -118,14 +197,9 @@ class _AlarmDiagnosticsSheetState
                 color: SetBeatColors.accentSoft,
                 borderRadius: BorderRadius.circular(SetBeatRadii.sm),
               ),
-              child: const Text(
-                '提醒要「弹出来」，除了允许通知，还必须在通知设置里勾选：\n'
-                '· 横幅（悬浮弹出，不勾就永远不弹）\n'
-                '· 锁屏（息屏时在锁屏上显示）\n'
-                '· 铃声 / 振动（想要声音就打开）\n'
-                '另外请确认手机没有开静音或勿扰，并把本应用的电池策略设为「无限制」。\n'
-                '注意：短于 1 分钟的段位不弹边界提醒（避免刷屏），训练结束始终会提醒。',
-                style: TextStyle(
+              child: Text(
+                _guidanceText(),
+                style: const TextStyle(
                   color: SetBeatColors.text2,
                   fontSize: 12,
                   height: 1.6,
@@ -157,8 +231,32 @@ class _AlarmDiagnosticsSheetState
               onTap: () => PlatformBridge.openExactAlarmSettings(),
             ),
             const SizedBox(height: 10),
+            if (_batteryExempt == false)
+              _ActionButton(
+                label: '申请豁免电池优化（弹系统对话框）',
+                primary: true,
+                onTap: () async {
+                  await PlatformBridge.requestIgnoreBatteryOptimizations();
+                  await _refresh();
+                },
+              ),
+            if (_batteryExempt == false) const SizedBox(height: 10),
+            // 这两个入口点一次就到位，比让用户自己翻五层菜单现实得多。
+            // 厂商 ROM 的组件名随版本改名，跳转失败会兜底到应用详情页，
+            // 所以按钮永远可用。
+            if (_vendor?.hasAutoStartPage ?? false)
+              _ActionButton(
+                label: '打开「自启动管理」',
+                onTap: () => RomCompat.openAutoStart(),
+              ),
+            if (_vendor?.hasAutoStartPage ?? false) const SizedBox(height: 10),
             _ActionButton(
-              label: '打开应用详情（电池 / 自启动白名单）',
+              label: '打开「耗电管理 / 省电策略」',
+              onTap: () => RomCompat.openPowerManager(),
+            ),
+            const SizedBox(height: 10),
+            _ActionButton(
+              label: '打开应用详情',
               onTap: () => PlatformBridge.openAppDetailsSettings(),
             ),
             const SizedBox(height: 14),

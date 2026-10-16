@@ -6,6 +6,7 @@ import '../data/preset_repository.dart';
 import '../data/running_state_repository.dart';
 import '../data/settings_repository.dart';
 import '../models/app_settings.dart';
+import '../services/foreground_timer_service.dart';
 import '../services/haptics_service.dart';
 import '../services/notification_service.dart';
 import '../services/sound_service.dart';
@@ -32,6 +33,14 @@ final Provider<HapticsService> hapticsServiceProvider =
 
 final Provider<NotificationService> notificationServiceProvider =
     Provider<NotificationService>((Ref ref) => NotificationService());
+
+/// 前台服务（常驻通知）。计时开始时拉起，结束时停掉。
+///
+/// 它不是「锦上添花的进度展示」，而是**国产 ROM 上提醒能不能到达的前提**：
+/// 进程被 force-stop 时系统会连带清空 AlarmManager 闹钟，前台服务是唯一
+/// 能阻止这件事发生的合法手段。
+final Provider<ForegroundTimerService> foregroundServiceProvider =
+    Provider<ForegroundTimerService>((Ref ref) => ForegroundTimerService());
 
 /// 启动引导结果：每个服务的成败都有记录，UI 据此给出可见提示。
 class BootstrapReport {

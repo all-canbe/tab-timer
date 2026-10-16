@@ -79,9 +79,6 @@ class _StubNotificationService extends NotificationService {
 
   @override
   Future<bool> showTestAlert() async => true;
-
-  @override
-  Future<void> cancelTestAlert() async {}
 }
 
 /// 回归测试：进程被杀后重启，要能看到「上次计时未完成」的恢复弹窗。

@@ -29,6 +29,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- 申请豁免电池优化。国产 ROM（ColorOS/MIUI/EMUI）上，未豁免的应用
+         退后台会被冻结甚至 force-stop；而 force-stop 会清空该应用全部
+         AlarmManager 闹钟 —— 这才是「模拟器能弹、真机不弹」的根因，
+         不是通知权限问题。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:label="SetBeat Flutter"
         android:name="${applicationName}"
@@ -62,8 +68,45 @@
             android:value="2" />
 
         <!-- ============================================================
-             flutter_local_notifications 所需接收器
-             缺任意一个都会导致「排期的提醒到点不触发」。
+             flutter_foreground_task 的常驻通知小图标
+             值必须是纯白单色剪影（Android 拿它当遮罩自行着色）。
+             复用 flutter_local_notifications 那张 ic_stat_setbeat，避免两套图标。
+             ============================================================ -->
+        <meta-data
+            android:name="com.pravera.flutter_foreground_task.notification_icon"
+            android:resource="@drawable/ic_stat_setbeat" />
+
+        <!-- ============================================================
+             提醒排期与投递（自研原生实现）
+
+             为什么不用 flutter_local_notifications 投递：那个插件的通知 id
+             同时就是 AlarmManager 的 requestCode，且其 Intent 无任何唯一标识。
+             于是「多个提醒共用一个通知槽位」与「每个提醒都触发」互斥 ——
+             同 id 排期时系统只保留最后一个闹钟。详见 SetBeatAlerts 类注释。
+
+             这两个接收器不能删：缺任意一个，「排了提醒但到点不触发」。
+             ============================================================ -->
+        <receiver
+            android:name=".SetBeatAlertReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".SetBeatBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ============================================================
+             flutter_local_notifications 剩余用途：**仅权限探测与申请**。
+             （requestNotificationsPermission / canScheduleExactNotifications）
+             通知的排期与投递已全部迁移到上面的原生实现。
+             这几个 receiver 保留着，用于清理旧版本遗留的排期 —— 升级前
+             已排进系统但尚未触发的闹钟，不收掉的话会在之后某个时刻补发出来，
+             表现为「好几条通知同时弹」。
              ============================================================ -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
@@ -81,6 +124,30 @@
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
             android:exported="false" />
+
+        <!-- ============================================================
+             计时期间的前台服务 —— 这是「国产 ROM 上提醒能不能到达」的前提。
+
+             原理：ColorOS / MIUI / EMUI 等会冻结甚至 force-stop 不在白名单里
+             的后台应用，而 **Android 在 force-stop 一个应用时会连带清空它
+             全部 AlarmManager 闹钟**。没有前台服务时，计时排好的闹钟会被系统
+             悄悄抹掉 —— 表现为「3 秒测试能弹、1 分钟计时到点什么都不发生」。
+             前台服务带常驻通知，系统不敢随便杀，闹钟才活得下来。
+
+             foregroundServiceType 必须声明（Android 14+ 硬性要求，缺了服务
+             起不来）。选 specialUse 而不是 dataSync：
+               · dataSync 在 Android 15 上有 24 小时内累计 6 小时的运行上限；
+               · specialUse 没有运行时前置条件，也没有时长限制 ——
+                 计时器类应用用它最合适。
+             ============================================================ -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="训练计时器运行期间的前台服务：维持进程存活以保证已排期的阶段提醒按时触发，并在常驻通知中显示当前阶段与剩余时间。" />
+        </service>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

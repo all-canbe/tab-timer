@@ -82,6 +82,59 @@ class UpcomingBoundary {
       'Boundary(${isFinal ? "END" : "pos$position"} in ${(inMs / 1000).round()}s)';
 }
 
+/// 前台服务用的段位时间轴项：**每一个段位**的起止墙钟时刻。
+///
+/// 与 [UpcomingBoundary] 的分工：
+///   - [UpcomingBoundary] 是「即将发生的切换点」，只喂给系统闹钟，会被
+///     「短于 1 分钟的段位不发提醒」这类规则过滤掉；
+///   - [ForegroundPhase] 描述「现在处于哪个段位、到几点结束」，喂给常驻通知，
+///     **不做任何时长过滤** —— 通知的职责是给用户看，不是刷屏。
+///
+/// 存的是**绝对墙钟毫秒**而不是相对剩余量，所以拿到它的一方（可能是被冻结
+/// 很久之后才醒来的后台 isolate）算一次减法就能得到正确的剩余时间，
+/// 不需要任何补偿逻辑。
+class ForegroundPhase {
+  final String label;
+  final int startWallMs;
+  final int endWallMs;
+  final int round;
+  final int totalRounds;
+  final bool isLast;
+
+  const ForegroundPhase({
+    required this.label,
+    required this.startWallMs,
+    required this.endWallMs,
+    required this.round,
+    required this.totalRounds,
+    required this.isLast,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'label': label,
+        'start': startWallMs,
+        'end': endWallMs,
+        'round': round,
+        'totalRounds': totalRounds,
+        'isLast': isLast,
+      };
+
+  static ForegroundPhase? fromJson(Map<String, dynamic> json) {
+    final Object? label = json['label'];
+    final Object? end = json['end'];
+    final Object? start = json['start'];
+    if (label is! String || end is! int || start is! int) return null;
+    return ForegroundPhase(
+      label: label,
+      startWallMs: start,
+      endWallMs: end,
+      round: json['round'] is int ? json['round'] as int : 1,
+      totalRounds: json['totalRounds'] is int ? json['totalRounds'] as int : 1,
+      isLast: json['isLast'] == true,
+    );
+  }
+}
+
 /// 核心计时引擎。纯 Dart，不依赖 Flutter，可脱离 UI 单测。
 ///
 /// ## 与原版的关键差异
@@ -350,6 +403,45 @@ class TimerEngine {
 
     if (out.length <= maxItems) return out;
     return <UpcomingBoundary>[
+      ...out.sublist(0, maxItems - 1),
+      out.last,
+    ];
+  }
+
+  /// 从**当前段位**开始，列出后续每个段位的起止绝对时刻。
+  ///
+  /// 与 [upcomingBoundaries] 的关键差异是「包含当前段位」：常驻通知要显示的
+  /// 是「我现在在做什么、还剩多久」，而不是「下一个切换点是几点」。
+  ///
+  /// [maxItems] 限制下发到后台 isolate 的数据量（超长方案如 2 卡 × 100 循环
+  /// 有 200 段）。裁剪时**保留首项与末项**：首项是通知立刻要显示的，末项标记
+  /// 整段结束，两头都不能丢。
+  List<ForegroundPhase> foregroundPhases({int maxItems = 128}) {
+    final TrainingPreset? preset = _preset;
+    if (preset == null || _cards.isEmpty) return const <ForegroundPhase>[];
+
+    final double elapsed = elapsedMs;
+    final int wallNow = _clock.wallMs();
+    final int cardCount = preset.cards.length;
+
+    final List<ForegroundPhase> out = <ForegroundPhase>[];
+    for (int i = _position; i < _cards.length; i++) {
+      final double startOff = _cumMs[i] - elapsed;
+      final double endOff = _cumMs[i + 1] - elapsed;
+      // 已经跑完的段位直接丢掉；只有当前段位可能 startOff < 0
+      if (endOff <= 0) continue;
+      out.add(ForegroundPhase(
+        label: _cards[i].label,
+        startWallMs: wallNow + math.max(0, startOff).round(),
+        endWallMs: wallNow + endOff.round(),
+        round: cardCount == 0 ? 1 : (i ~/ cardCount) + 1,
+        totalRounds: preset.loopCount,
+        isLast: i == _cards.length - 1,
+      ));
+    }
+
+    if (out.length <= maxItems) return out;
+    return <ForegroundPhase>[
       ...out.sublist(0, maxItems - 1),
       out.last,
     ];

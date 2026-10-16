@@ -1,4 +1,4 @@
-import 'dart:ui' show Color;
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -53,21 +53,35 @@ class AlarmCapability {
 /// ## Flutter 版的做法
 ///
 /// **排期制**：开始计时的瞬间，就把后续每一个段位切换点和结束点
-/// 全部用 `zonedSchedule` 交给系统 AlarmManager。到点由**操作系统**触发通知，
+/// 全部交给系统 AlarmManager。到点由**操作系统**触发通知，
 /// 与 App 进程是否存活无关——息屏、退后台、甚至杀掉进程都能弹。
 ///
 /// 这才是计时器类应用的正解：不要指望自己的进程活着，要指望系统闹钟准时。
+///
+/// ## 为什么排期与投递改成了原生实现（`SetBeatAlerts`）
+///
+/// 原先走 `flutter_local_notifications` 的 `zonedSchedule`。但那个插件的
+/// **通知 id 同时就是 AlarmManager 的 requestCode**，而它构造的 Intent 里
+/// 除了 extras 没有任何唯一标识。于是：
+///
+///   · 想要「多条提醒共用一个通知槽位、新的顶掉旧的」→ 必须传同一个 id
+///     → requestCode 相同 + Intent filterEquals 相同 → PendingIntent 被判等
+///     → AlarmManager 只保留最后一个闹钟，**前面的提醒全部静默丢失**。
+///
+/// 「一个槽位」和「每条都触发」在它的公开 API 下互斥，只能自己把
+/// 通知槽位与闹钟 requestCode 解耦。顺带还修掉了另一个隐患：插件靠本地缓存
+/// 做取消，缓存失准（反复重装 / force-stop）时旧闹钟会赖在系统里，之后
+/// 被 Doze 解除后的补发一次性全投递 —— 这就是「好几条通知一起弹」的来源。
+///
+/// 现在这个类只负责三件事：**权限、文案、以及把排期翻译成原生调用**。
 class NotificationService {
   static const String _channelId = 'setbeat_timer_alerts';
   static const String _channelName = '计时提醒';
   static const String _channelDescription = '训练计时器的阶段切换与结束提醒';
 
-  /// 通知 id 的固定基数。排期槽位 = 基数 + 序号，
-  /// 固定基数让「取消本次计时的全部提醒」变成一次 cancelAllPendingNotifications。
-  static const int _baseId = 0x5E7B0000;
-
-  /// 「提醒测试」专用 id，与计时排期互不干扰
-  static const int _testAlertId = _baseId + 999;
+  /// 单次排期的段位上限。与原生 `SetBeatAlerts.MAX_ALERTS` 保持一致 ——
+  /// 超出部分原生会丢弃，这里先裁掉以免产生「排了但没生效」的错觉。
+  static const int _maxAlerts = 64;
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
@@ -75,13 +89,10 @@ class NotificationService {
   bool _initialized = false;
   bool get isReady => _initialized;
 
-  /// 精确闹钟是否可用。不可用时自动降级为 inexact（仍会弹出，最多延迟几分钟），
-  /// 而不是静默不排。
+  /// 精确闹钟是否可用。不可用时原生侧自动降级（仍会弹出，最多延迟几分钟），
+  /// 而不是静默不排。这里保留一份是为了让 UI 能显示诊断信息。
   bool _exactAllowed = true;
   bool get exactAllowed => _exactAllowed;
-  AndroidScheduleMode get _scheduleMode => _exactAllowed
-      ? AndroidScheduleMode.exactAllowWhileIdle
-      : AndroidScheduleMode.inexactAllowWhileIdle;
 
   /// 最近一次排期失败的错误（供 UI 展示诊断信息）
   String? lastScheduleError;
@@ -119,6 +130,8 @@ class NotificationService {
 
       // 显式建渠道并设为最高重要性 —— 这是「悬浮式提醒（heads-up）」的前提。
       // 低于 IMPORTANCE_HIGH 的渠道只会静静躺在通知栏里，用户根本注意不到。
+      // 原生 `SetBeatAlerts.ensureChannel` 会建同名渠道，两边是幂等的；
+      // 渠道属性创建后不可改，所以老用户既有的重要性/铃声选择会被保留。
       await _plugin
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
@@ -131,6 +144,12 @@ class NotificationService {
             enableVibration: true,
             vibrationPattern: Int64List.fromList(<int>[0, 400, 150, 400]),
           ));
+
+      // 升级期清理：旧版本用插件排下的闹钟此刻仍真实存在于系统中，
+      // 到点照样会弹。两条路一起收 —— 插件的缓存路径，加原生的探测路径
+      //（缓存失准时只有后者管用）。
+      await _plugin.cancelAllPendingNotifications();
+      await PlatformBridge.cancelLegacyAlerts();
 
       _initialized = true;
     } catch (_) {
@@ -227,39 +246,40 @@ class NotificationService {
     }
   }
 
-  /// 发一条 3 秒后的测试提醒，走与真实计时完全相同的排期路径。
+  /// 只读地探测系统是否真的允许精确闹钟（不弹任何对话框）。
+  ///
+  /// 存在的意义：`_exactAllowed` 的初值是 true，若设备实际没授权，
+  /// 首轮排期必然整批失败、被 catch 吞成一条不剩。排期前先问一次系统，
+  /// 就能把那个"必然失败的首轮"消灭掉。
+  ///
+  /// 注意 Android <12 没有这个开关，接口返回 null —— 此时保持原判断。
+  Future<void> primeExactAlarmCapability() async {
+    if (kIsWeb) return;
+    try {
+      final AndroidFlutterLocalNotificationsPlugin? impl =
+          _plugin.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      final bool? can = await impl?.canScheduleExactNotifications();
+      if (can != null) _exactAllowed = can;
+    } catch (_) {
+      // 探测失败不改判断，交给排期路径的降级重试兜底
+    }
+  }
+
+  /// 发一条 3 秒后的测试提醒，走与真实计时**完全相同**的原生排期与投递路径。
   ///
   /// 这是「弹不出来」问题的终极自证手段：能看到它 → 链路正常，
-  /// 问题在计时逻辑；看不到 → 问题在系统通知设置。
+  /// 问题在计时逻辑；看不到 → 问题在系统通知设置或后台策略。
+  ///
+  /// 测试提醒用独立的通知槽位与 requestCode，既不会顶掉真实提醒，
+  /// 也不会被「取消全部排期」顺手清掉。3 秒后自动弹，无需手动收尾。
   Future<bool> showTestAlert() async {
     await init();
     if (kIsWeb) return false;
     lastScheduleError = null;
-    try {
-      final tz.TZDateTime when =
-          tz.TZDateTime.now(tz.local).add(const Duration(seconds: 3));
-      await _plugin.zonedSchedule(
-        id: _testAlertId,
-        title: '提醒测试',
-        body: '看到这条说明系统提醒链路正常',
-        scheduledDate: when,
-        notificationDetails: NotificationDetails(android: _alertDetails()),
-        androidScheduleMode: _scheduleMode,
-        payload: 'test',
-      );
-      return true;
-    } catch (e) {
-      lastScheduleError = e.toString();
-      return false;
-    }
-  }
-
-  /// 取消测试提醒
-  Future<void> cancelTestAlert() async {
-    if (kIsWeb) return;
-    try {
-      await _plugin.cancel(id: _testAlertId);
-    } catch (_) {}
+    final bool ok = await PlatformBridge.showTestAlert();
+    if (!ok) lastScheduleError = '原生排期失败（检查通知权限）';
+    return ok;
   }
 
   /// 把一次计时展开成系统级排期。
@@ -269,95 +289,74 @@ class NotificationService {
   ///
   /// 失败不抛出（不打断计时），错误记录到 [lastScheduleError]，
   /// 由 UI 结合 [pendingNotificationCount] 展示诊断信息。
+  ///
+  /// 语义是「**整体替换**」：原生侧进来先无条件清空再排，所以不存在
+  /// 「重复调用导致叠加」的可能。调用方可以放心地在段位切换、暂停恢复、
+  /// 跨进程恢复等各处反复调用。
   Future<void> scheduleAlerts(
     String presetName,
     List<UpcomingBoundary> boundaries,
   ) async {
-    // ignore: avoid_print
-    print('[restore-probe] scheduleAlerts begin');
     await init();
-    // ignore: avoid_print
-    print('[restore-probe] scheduleAlerts init done');
     lastScheduleError = null;
-    if (kIsWeb || boundaries.isEmpty) return;
+    if (kIsWeb) return;
 
-    try {
-      // 先清掉上一轮的排期，避免残留
-      await cancelAll();
+    // 排期前先问系统「精确闹钟到底给不给」，让 UI 能显示准确的能力状态。
+    // 原生侧自己也会判断并按需降级，这里只是把状态同步过来。
+    await primeExactAlarmCapability();
 
-      final NotificationDetails details = NotificationDetails(
-        android: _alertDetails(),
-      );
-      final tz.TZDateTime now = tz.TZDateTime.now(tz.local);
+    final int nowMs = DateTime.now().millisecondsSinceEpoch;
 
-      int slot = 0;
-      for (final UpcomingBoundary b in boundaries) {
-        final tz.TZDateTime when = tz.TZDateTime.fromMillisecondsSinceEpoch(
-            tz.local, b.atWallMs);
-        // 已经过去的边界（比如恢复后立刻排期时）直接跳过
-        if (!when.isAfter(now)) continue;
-
-        await _plugin.zonedSchedule(
-          id: _baseId + slot,
-          title: _titleFor(presetName, b),
-          body: _bodyFor(b),
-          scheduledDate: when,
-          notificationDetails: details,
-          // 精确闹钟不可用时降级为 inexact：仍会弹出，最多延迟几分钟，
-          // 远好于因为权限被拒而整条提醒链路静默失效。
-          androidScheduleMode: _scheduleMode,
-          payload: b.isFinal ? 'finish' : 'switch:${b.position}',
-        );
-        slot++;
-      }
-    } catch (e) {
-      lastScheduleError = e.toString();
+    // 已经过去的边界直接不发 —— 交给系统的话它会对过去时间立刻触发，
+    // 那才是真正意义上的「好几条一起弹」。
+    final List<Map<String, Object>> alerts = <Map<String, Object>>[];
+    int seq = 0;
+    for (final UpcomingBoundary b in boundaries) {
+      if (alerts.length >= _maxAlerts) break;
+      if (b.atWallMs <= nowMs) continue;
+      alerts.add(<String, Object>{
+        // seq 决定闹钟的 requestCode，必须稳定 —— 重启后恢复靠它找回同一个闹钟
+        'seq': seq,
+        'atMs': b.atWallMs,
+        'title': _titleFor(presetName, b),
+        'body': _bodyFor(b),
+        // 结束提醒投递时，原生侧会顺带停掉常驻通知。否则「训练完成」会
+        // 同时出现在常驻通知和提醒通知里，看起来就是重复的两条。
+        'isFinal': b.isFinal,
+      });
+      seq++;
     }
-    // ignore: avoid_print
-    print('[restore-probe] scheduleAlerts end');
+
+    if (alerts.isEmpty) {
+      // 没有未来边界（比如恢复时已经跑完），清掉残留即可
+      await cancelAll();
+      return;
+    }
+
+    final bool ok =
+        await PlatformBridge.scheduleTimerAlerts(jsonEncode(alerts));
+    if (!ok) {
+      lastScheduleError = '系统拒绝了提醒排期（检查通知与「闹钟和提醒」权限）';
+    }
   }
 
-  /// 当前待触发的排期数量。UI 用它确认排期是否真的写进了系统。
+  /// 系统里**真实存在**的闹钟数量。
+  ///
+  /// 与旧实现的根本差别：以前读的是插件自己的本地记录，应用被 force-stop
+  /// 后系统清空了闹钟，它照样报出旧数字（假阳性，排查时被误导过）。
+  /// 现在这个数字是逐个探测系统拿到的，说 0 就是真的没有。
   Future<int> pendingNotificationCount() async {
     if (kIsWeb) return 0;
-    try {
-      return (await _plugin.pendingNotificationRequests()).length;
-    } catch (_) {
-      return -1;
-    }
+    return PlatformBridge.armedAlertCount();
   }
 
   /// 取消全部待触发的提醒。暂停 / 重置 / 离开计时页时调用。
   Future<void> cancelAll() async {
     if (kIsWeb) return;
-    try {
-      await _plugin.cancelAllPendingNotifications();
-    } catch (_) {}
+    await PlatformBridge.cancelTimerAlerts();
   }
 
   // ------------------------------------------------------------------ 内部
-
-  AndroidNotificationDetails _alertDetails() => AndroidNotificationDetails(
-        _channelId,
-        _channelName,
-        channelDescription: _channelDescription,
-        importance: Importance.max,
-        priority: Priority.max,
-        category: AndroidNotificationCategory.alarm,
-        playSound: true,
-        enableVibration: true,
-        // 注意类型是 Int64List 而不是 List<int>
-        vibrationPattern: Int64List.fromList(<int>[0, 400, 150, 400]),
-        enableLights: true,
-        ledColor: const Color(0xFFFF6B35),
-        // 开了呼吸灯就必须同时给亮灭时长，否则插件在 Android 8 以下
-        // 校验路径抛 invalid_led_details，整个排期失败（真机已踩）
-        ledOnMs: 400,
-        ledOffMs: 150,
-        color: const Color(0xFFFF6B35),
-        autoCancel: true,
-        ticker: 'SetBeat 计时提醒',
-      );
 
   String _titleFor(String presetName, UpcomingBoundary b) {
     if (b.isFinal) return '训练完成';
