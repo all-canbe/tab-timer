@@ -62,3 +62,6 @@ android/app/build/
 android/app/src/main/assets/
 android/app/src/main/res/xml/
 android/capacitor-cordova-android-plugins/
+
+# 本地同步脚本（子目录开发 → 根目录发布），仅供本地使用，不提交
+sync-from-dev.ps1
